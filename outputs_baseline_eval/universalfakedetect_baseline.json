@@ -1,0 +1,13 @@
+{
+  "root": "D:\\WorkSpace\\NPR-DeepfakeDetection\\dataset\\UniversalFakeDetect",
+  "num_samples": 16000,
+  "accuracy_pct": 66.38,
+  "real_accuracy_pct": 87.1,
+  "fake_accuracy_pct": 45.65,
+  "ap_pct": 73.66,
+  "auc_pct": 74.01,
+  "tn": 6968,
+  "fp": 1032,
+  "fn": 4348,
+  "tp": 3652
+}

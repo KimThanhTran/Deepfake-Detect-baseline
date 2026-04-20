@@ -72,7 +72,7 @@ def parse_args():
     parser.add_argument("--xai_samples_per_class", type=int, default=2)
     parser.add_argument("--output_dir", default="outputs")
     parser.add_argument("--gpu", default="0")
-    parser.add_argument("--model_type", default="npr", choices=["baseline", "npr"])
+    parser.add_argument("--model_type", default="npr", choices=["baseline", "npr", "hybrid"])
     return parser.parse_args()
 
 
@@ -194,8 +194,18 @@ class GradCAM:
         self.backward_handle.remove()
 
 
+def resolve_gradcam_target_layer(model):
+    if hasattr(model, "layer2"):
+        return model.layer2[-1]
+    if hasattr(model, "backbone") and hasattr(model.backbone, "layer4"):
+        return model.backbone.layer4[-1]
+    if hasattr(model, "spatial_branch") and hasattr(model.spatial_branch, "layer4"):
+        return model.spatial_branch.layer4[-1]
+    raise AttributeError(f"Could not resolve a Grad-CAM target layer for {type(model).__name__}")
+
+
 def load_model(model_path, device, model_type="npr"):
-    checkpoint = torch.load(model_path, map_location="cpu")
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
     if isinstance(checkpoint, dict) and "model_type" in checkpoint:
         model_type = checkpoint["model_type"]
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
@@ -314,7 +324,7 @@ def evaluate_dataset(model, device, dataset_name, dataset_root, config, args, ru
     xai_dir = dataset_dir / "xai"
     xai_dir.mkdir(parents=True, exist_ok=True)
 
-    grad_cam = GradCAM(model, model.layer2[-1])
+    grad_cam = GradCAM(model, resolve_gradcam_target_layer(model))
     selected_indices = choose_xai_indices(records, args.xai_samples_per_class)
 
     for sample_id, sample_index in enumerate(selected_indices):

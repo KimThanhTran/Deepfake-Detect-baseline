@@ -50,12 +50,12 @@ BENCHMARK_INFERENCE_CONFIG = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Full experiment pipeline for baseline, NPR, and NPR fine-tuning."
+        description="Full experiment pipeline for baseline, NPR, hybrid, and optional fine-tuning."
     )
     parser.add_argument("--datasets_root", type=Path, default=None)
     parser.add_argument("--checkpoints_dir", type=Path, default=Path("checkpoints"))
     parser.add_argument("--outputs_dir", type=Path, default=Path("outputs"))
-    parser.add_argument("--models", nargs="+", default=["baseline", "npr", "npr_finetune"])
+    parser.add_argument("--models", nargs="+", default=["baseline", "hybrid", "hybrid_finetune"])
     parser.add_argument("--dataset_names", nargs="*", default=None)
     parser.add_argument("--train_dataset", default="ForenSynths")
     parser.add_argument("--train_split", default="train")
@@ -279,7 +279,7 @@ def run_subprocess(command: Sequence[str]) -> None:
 
 
 def load_checkpoint_metadata(checkpoint_path: Path) -> Dict[str, object]:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if isinstance(checkpoint, dict):
         return checkpoint
     return {"model": checkpoint}
@@ -383,7 +383,7 @@ def normalize_state_with_existing_checkpoints(
 
 
 def load_model(model_path: Path, model_type: str, device: torch.device) -> torch.nn.Module:
-    checkpoint = torch.load(model_path, map_location="cpu")
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
     if isinstance(checkpoint, dict) and "model_type" in checkpoint:
         model_type = str(checkpoint["model_type"])
     state_dict = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
@@ -756,10 +756,44 @@ def main() -> None:
                 train_model("baseline", "baseline", args, datasets_root, state)
             elif model_key == "npr":
                 train_model("npr", "npr", args, datasets_root, state)
+            elif model_key == "hybrid":
+                train_model("hybrid", "hybrid", args, datasets_root, state)
         save_pipeline_state(state_path, state)
 
-    if "finetune" in args.stages and "npr_finetune" in args.models:
-        finetune_model(args, state)
+    if "finetune" in args.stages:
+        if "npr_finetune" in args.models:
+            finetune_model(args, state)
+        if "hybrid_finetune" in args.models:
+            if "hybrid" not in state:
+                raise FileNotFoundError("Hybrid checkpoint metadata is missing; train or provide hybrid first.")
+            hybrid_state = state["hybrid"]
+            run_dir = Path(hybrid_state["run_dir"])
+            latest_path = run_dir / "model_epoch_latest.pth"
+            if not latest_path.is_file():
+                raise FileNotFoundError(f"Hybrid latest checkpoint not found: {latest_path}")
+            metadata = load_checkpoint_metadata(latest_path)
+            start_epoch = int(metadata.get("epoch", 0))
+            target_niter = start_epoch + args.finetune_extra_epochs
+            command = build_train_command(
+                model_type="hybrid",
+                run_name=run_dir.name,
+                dataroot=Path(get_training_root(resolve_datasets_root(args.datasets_root), args.train_dataset, args.train_split)),
+                args=args,
+                continue_train=True,
+                lr=args.finetune_lr,
+                epoch="latest",
+                niter=target_niter,
+            )
+            run_subprocess(command)
+            checkpoint = latest_checkpoint_in_run(run_dir)
+            if checkpoint is None:
+                raise FileNotFoundError(f"No fine-tuned hybrid checkpoint found in {run_dir}")
+            snapshot = snapshot_checkpoint(checkpoint, args.outputs_dir, "hybrid_finetune")
+            state["hybrid_finetune"] = {
+                "model_type": "hybrid",
+                "run_dir": str(run_dir),
+                "checkpoint": str(snapshot),
+            }
         save_pipeline_state(state_path, state)
 
     evaluation_rows: List[Dict[str, object]] = []

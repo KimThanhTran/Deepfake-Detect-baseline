@@ -14,7 +14,7 @@ class BaseOptions():
     def initialize(self, parser):
         parser.add_argument('--mode', default='binary')
         parser.add_argument('--arch', type=str, default='res50', help='architecture for binary classification')
-        parser.add_argument('--model_type', type=str, default='npr', choices=['baseline', 'npr'],
+        parser.add_argument('--model_type', type=str, default='npr', choices=['baseline', 'npr', 'hybrid'],
                             help='which detector to use')
 
         # data augmentation
@@ -33,6 +33,7 @@ class BaseOptions():
         parser.add_argument('--cropSize', type=int, default=224, help='then crop to this size')
         parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
         parser.add_argument('--name', type=str, default='experiment_name', help='name of the experiment. It decides where to store samples and models')
+        parser.add_argument('--no_timestamp', action='store_true', help='keep run name exactly as provided without appending a timestamp')
         parser.add_argument('--epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
         parser.add_argument('--num_threads', default=8, type=int, help='# threads for loading data')
         parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
@@ -86,7 +87,7 @@ class BaseOptions():
 
         opt = self.gather_options()
         opt.isTrain = self.isTrain   # train or test
-        if not (opt.isTrain and getattr(opt, 'continue_train', False)):
+        if not getattr(opt, 'no_timestamp', False) and not (opt.isTrain and getattr(opt, 'continue_train', False)):
             opt.name = opt.name + time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime())
         # process opt.suffix
         if opt.suffix:

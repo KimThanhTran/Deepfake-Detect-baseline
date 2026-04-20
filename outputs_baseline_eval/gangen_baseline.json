@@ -1,0 +1,13 @@
+{
+  "root": "D:\\WorkSpace\\NPR-DeepfakeDetection\\dataset\\GANGen-Detection",
+  "num_samples": 36000,
+  "accuracy_pct": 57.14,
+  "real_accuracy_pct": 64.8,
+  "fake_accuracy_pct": 49.49,
+  "ap_pct": 58.49,
+  "auc_pct": 60.21,
+  "tn": 11664,
+  "fp": 6336,
+  "fn": 9092,
+  "tp": 8908
+}

@@ -44,7 +44,7 @@ class BaseModel(nn.Module):
         print('loading the model from %s' % load_path)
         # if you are using PyTorch newer than 0.4 (e.g., built from
         # GitHub source), you can remove str() on self.device
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=False)
         if hasattr(checkpoint, '_metadata'):
             del checkpoint._metadata
 

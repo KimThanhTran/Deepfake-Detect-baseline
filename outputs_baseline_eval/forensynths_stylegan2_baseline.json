@@ -1,0 +1,13 @@
+{
+  "root": "D:\\WorkSpace\\NPR-DeepfakeDetection\\dataset\\ForenSynths\\test\\stylegan2",
+  "num_samples": 15976,
+  "accuracy_pct": 86.45,
+  "real_accuracy_pct": 87.69,
+  "fake_accuracy_pct": 85.2,
+  "ap_pct": 94.02,
+  "auc_pct": 94.23,
+  "tn": 7005,
+  "fp": 983,
+  "fn": 1182,
+  "tp": 6806
+}
