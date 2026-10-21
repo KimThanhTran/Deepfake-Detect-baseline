@@ -1,260 +1,193 @@
-# Rethinking the Up-Sampling Operations in CNN-based Generative Network for Generalizable Deepfake Detection
+# Deepfake Detection: Baseline vs NPR vs Hybrid
+
+A controlled comparison of three CNN detectors for AI-generated images (a plain RGB ResNet-50 baseline, the CVPR'24 NPR detector, and a spatial-frequency hybrid) with a full training, evaluation and reporting pipeline.
+
+![Python](https://img.shields.io/badge/Python-3-blue?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-ee4c2c?logo=pytorch&logoColor=white)
 
 <p align="center">
-	<br>
-	Beijing Jiaotong University, YanShan University, A*Star
+  <img src="./NPR.png" width="100%" alt="NPR overview (figure from the original paper)">
+  <br>
+  <em>Overview figure from the original NPR paper (Tan et al., CVPR 2024).</em>
 </p>
 
-<img src="./NPR.png" width="100%" alt="overall pipeline">
+This repository is part of a scientific research project on deepfake detection with CNNs, evaluated with **Accuracy, AUC and False Positive Rate (FPR)** plus AP, precision, recall and F1. It is built on the official code of
+[*Rethinking the Up-Sampling Operations in CNN-based Generative Network for Generalizable Deepfake Detection*](https://arxiv.org/abs/2312.10461) (CVPR 2024), and provides the **baseline and hybrid models** used to put the NPR detector in context. The NPR-focused extensions (AdaptiveNPR, Gradio demo, Docker) live in [`Deepfake-Detect`](https://github.com/KimThanhTran/Deepfake-Detect).
 
-Reference github repository for the paper [Rethinking the Up-Sampling Operations in CNN-based Generative Network for Generalizable Deepfake Detection](https://arxiv.org/abs/2312.10461).
+## 📌 Overview
+
+All three models are selected with one flag, `--model_type {baseline, npr, hybrid}` (`networks/__init__.py`):
+
+| `--model_type` | Model | Description |
+|---|---|---|
+| `baseline` | RGB ResNet-50 | torchvision ResNet-50 (randomly initialized, `weights=None`) with a 1-logit head, fed with the plain RGB image |
+| `npr` | NPR | The original NPR detector (`networks/resnet.py`), which classifies the neighboring-pixel residual |
+| `hybrid` | HSF (Hybrid Spatial-Frequency) | ResNet-50 spatial branch (512-d) + CNN over the FFT log-magnitude spectrum (256-d), concatenated and classified by an MLP with dropout |
+
+### What this repository adds to the original code
+
+- Model factory and `--model_type` option in `train.py`, `test.py` and the evaluators.
+- Training loop with per-epoch validation loss / accuracy / AP / AUC, best-checkpoint saving (by validation AP), early stopping, resumable training (`--continue_train`, `--no_timestamp`) and TensorBoard logging.
+- `experiment_pipeline.py`: one script that trains, optionally fine-tunes, runs inference, evaluates and compares the models, with a resumable state file.
+- Benchmark evaluation (`evaluate_benchmarks.py`): Accuracy, precision, recall, F1, AP, ROC-AUC, real/fake accuracy and confusion-matrix counts per subset, plus **Grad-CAM overlays** for sample images, saved to `predictions.csv`, `summary.csv/json` and an `xai/` folder.
+- `generate_html_report.py`: turns a `summary.csv` into an HTML benchmark report.
+- Kaggle notebooks for the baseline, hybrid and hybrid fine-tuning runs.
+
+## 📊 Results
+
+All values are taken from files in this repository. FPR is derived from the stored confusion matrix as `FP / (FP + TN)`.
+
+### 1. Validation during training (ForenSynths `val`, 10 epochs)
+
+Source: `paper_baseline_10ep*/log.log` and `paper_hybrid_10ep/log.log` (Kaggle runs; `opt.txt` records the settings: Adam, lr 1e-4, 10 epochs, no augmentation; batch size 64 for the baseline and 16 for the hybrid). The "best" checkpoint is the one with the highest validation AP.
+
+| Model | Best epoch | Val Acc | Val AP | Val AUC | Last epoch (10) Acc / AP / AUC |
+|---|---:|---:|---:|---:|---|
+| Baseline RGB ResNet-50 | 9 | 91.63% | 99.08% | 99.06% | 72.94% / 90.54% / 90.20% |
+| Hybrid (HSF) | 9 | 89.62% | 98.17% | 98.24% | 91.69% / 97.30% / 97.32% |
+
+The hybrid starts much higher (epoch 1 val accuracy 81.31% vs 52.62% for the baseline), while the baseline needs several epochs to start learning; both fluctuate noticeably between epochs. One epoch took about 2,540 s for the baseline and 3,180 s for the hybrid in these logs.
+
+### 2. Test results of the baseline model
+
+Source: `outputs_baseline_eval/benchmark_eval_20260410_153954/summary.csv` (checkpoint `paper_baseline_10ep.../model_epoch_best.pth`, threshold 0.5).
+
+| ForenSynths test subset | Samples | Accuracy | AP | ROC-AUC | FPR |
+|---|---:|---:|---:|---:|---:|
+| ProGAN | 8,000 | 90.75% | 97.11% | 96.87% | 10.82% |
+| StyleGAN | 11,982 | 72.83% | 82.88% | 80.93% | 11.62% |
+| StarGAN | 3,998 | 68.21% | 74.56% | 74.45% | 21.31% |
+| CycleGAN | 2,642 | 66.84% | 70.84% | 72.85% | 39.82% |
+| GauGAN | 10,000 | 60.05% | 57.94% | 62.94% | 48.00% |
+| BigGAN | 4,000 | 52.78% | 51.75% | 54.68% | 40.10% |
+| DeepFake | 5,405 | 51.77% | 53.71% | 53.48% | 54.86% |
+
+Additional baseline results stored as single JSON files in `outputs_baseline_eval/`:
+
+| Test set | Samples | Accuracy | AP | ROC-AUC | FPR | Source |
+|---|---:|---:|---:|---:|---:|---|
+| ForenSynths StyleGAN2 | 15,976 | 86.45% | 94.02% | 94.23% | 12.31% | `forensynths_stylegan2_baseline.json` |
+| UniversalFakeDetect | 16,000 | 66.38% | 73.66% | 74.01% | 12.90% | `universalfakedetect_baseline.json` |
+| GANGen-Detection | 36,000 | 57.14% | 58.49% | 60.21% | 35.20% | `gangen_baseline.json` |
+
+**Takeaway:** the RGB baseline fits the training generator family (ProGAN) well but generalizes poorly to unseen generators (many subsets close to chance), which is the gap that NPR-style residual features and the frequency branch are meant to address. Test-set results for the hybrid model are **not** stored in this repository yet; run the evaluation below to produce them.
+
+Grad-CAM overlays for a few real/fake samples per subset are in `outputs_baseline_eval/benchmark_eval_20260410_153954/<subset>/xai/`.
+
+## 📁 Project structure
+
 ```
-@misc{tan2023rethinking,
-      title={Rethinking the Up-Sampling Operations in CNN-based Generative Network for Generalizable Deepfake Detection}, 
-      author={Chuangchuang Tan and Huan Liu and Yao Zhao and Shikui Wei and Guanghua Gu and Ping Liu and Yunchao Wei},
-      year={2023},
-      eprint={2312.10461},
-      archivePrefix={arXiv},
-      primaryClass={cs.CV}
+.
+├── train.py                  # training (--model_type baseline | npr | hybrid)
+├── test.py                   # evaluation of a checkpoint on the benchmark folders
+├── evaluate_benchmarks.py    # full metrics + Grad-CAM per benchmark
+├── evaluate_predictions.py   # metrics / figures from saved predictions
+├── experiment_pipeline.py    # train -> fine-tune -> inference -> evaluate -> compare
+├── generate_html_report.py   # HTML report from summary.csv
+├── tools/eval_binary_benchmark.py
+├── networks/                 # baseline_model.py, resnet.py (NPR), frequency_branch.py (hybrid), trainer.py
+├── options/, data/           # CLI options, datasets and dataloaders
+├── baseline-npr.ipynb, hybrid-hsf.ipynb, hybrid-finetune.ipynb   # Kaggle notebooks
+├── paper_baseline_10ep*/, paper_hybrid_10ep/   # training logs, options and TensorBoard events
+└── outputs_baseline_eval/    # baseline evaluation outputs (csv / json / Grad-CAM images)
+```
+
+## ⚙️ Installation
+
+```bash
+git clone https://github.com/KimThanhTran/Deepfake-Detect-baseline.git
+cd Deepfake-Detect-baseline
+
+python -m venv .venv
+# Windows: .venv\Scripts\activate      Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+`requirements.txt` lists scipy, scikit-learn, numpy, matplotlib, seaborn, opencv-python, Pillow, torch and torchvision. Install a CUDA build of PyTorch from the [PyTorch index](https://pytorch.org/get-started/locally/) if you have a GPU (the hybrid model uses `torch.fft`, so use a recent PyTorch). TensorBoard is optional: logging falls back to a no-op if it is missing.
+
+## 🚀 Usage
+
+### Train
+
+Expected layout: `<dataroot>/{train,val,test}` (see [Dataset notes](#-dataset-notes)). If `--classes` is empty, all class folders under the split are used.
+
+```bash
+# RGB ResNet-50 baseline
+python train.py --model_type baseline --name paper_baseline_10ep \
+    --dataroot ./dataset/ForenSynths --niter 10 --gpu_ids 0 --num_threads 4
+
+# Hybrid spatial-frequency model
+python train.py --model_type hybrid --name paper_hybrid_10ep --no_timestamp \
+    --dataroot ./dataset/ForenSynths --niter 10 --gpu_ids 0 --num_threads 4 --batch_size 16
+
+# NPR
+python train.py --model_type npr --name npr_run --dataroot ./dataset/ForenSynths --niter 10
+```
+
+Continue / fine-tune a run (as in `hybrid-finetune.ipynb`):
+
+```bash
+python train.py --model_type hybrid --name paper_hybrid_10ep --no_timestamp --continue_train \
+    --epoch latest --dataroot ./dataset/ForenSynths --niter 15 --batch_size 16 --lr 1e-5
+```
+
+Checkpoints go to `checkpoints/<name>/` (`model_epoch_best.pth`, `model_epoch_latest.pth`, `model_epoch_last.pth`). The Kaggle notebooks run the same commands.
+
+### Evaluate
+
+```bash
+# Metrics + Grad-CAM for every benchmark folder under ./dataset
+python evaluate_benchmarks.py --model_path checkpoints/<run>/model_epoch_best.pth \
+    --model_type baseline --output_dir outputs --batch_size 32
+
+# One benchmark root, JSON output
+python tools/eval_binary_benchmark.py --root ./dataset/GANGen-Detection \
+    --model_path checkpoints/<run>/model_epoch_best.pth --model_type baseline \
+    --output_json outputs/gangen.json
+
+# HTML report from a summary.csv
+python generate_html_report.py --report_dir outputs/<benchmark_eval_run>
+```
+
+`evaluate_benchmarks.py` covers `ForenSynths` (test), `GANGen-Detection`, `DiffusionForensics`, `UniversalFakeDetect` and `Diffusion1kStep` (select with `--benchmark`). `test.py --model_path <ckpt> --model_type <type>` prints accuracy / AP per subset, but its dataset roots are hard-coded near the top of the file and must be edited for your machine.
+
+### Full comparison pipeline
+
+```bash
+python experiment_pipeline.py --datasets_root ./dataset --models baseline hybrid hybrid_finetune \
+    --train_epochs 10 --stages train finetune inference evaluate compare
+```
+
+Stages are resumable through `outputs/pipeline_state.json`; `--existing_checkpoint model=path` reuses trained checkpoints.
+
+## 🗂 Dataset notes
+
+Datasets are not included in the repository. `download_dataset.sh` (uses `gdown`) downloads the benchmark data referenced by the original NPR project.
+
+```
+dataset/
+├── ForenSynths/{train,val,test}      # train/val: car, cat, chair, horse, each with 0_real / 1_fake
+├── GANGen-Detection/
+├── DiffusionForensics/
+├── UniversalFakeDetect/
+└── Diffusion1kStep/
+```
+
+Training and validation use ForenSynths (CNNDetection, Wang et al., CVPR 2020); the other sets are generalization benchmarks (links in the [original NPR repository](https://github.com/chuangchuangtan/NPR-DeepfakeDetection)). Evaluation folders use the `0_real` / `1_fake` convention.
+
+## 🙏 Acknowledgements & Citation
+
+This project builds on the official [NPR-DeepfakeDetection](https://github.com/chuangchuangtan/NPR-DeepfakeDetection) implementation by Chuangchuang Tan et al. (Beijing Jiaotong University, YanShan University, A*STAR), which in turn borrows partially from [CNNDetection](https://github.com/peterwang512/CNNDetection). If you use this work, please cite the NPR paper:
+
+```bibtex
+@inproceedings{tan2024rethinking,
+  title     = {Rethinking the Up-Sampling Operations in CNN-based Generative Network for Generalizable Deepfake Detection},
+  author    = {Tan, Chuangchuang and Liu, Huan and Zhao, Yao and Wei, Shikui and Gu, Guanghua and Liu, Ping and Wei, Yunchao},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year      = {2024},
+  eprint    = {2312.10461},
+  archivePrefix = {arXiv}
 }
 ```
 
-## News 🆕
-- `2024/02`: NPR is accepted by CVPR 2024! Congratulations and thanks to my all co-authors!
-- `2024/05`: [🤗Online Demo](https://huggingface.co/spaces/tancc/Generalizable_Deepfake_Detection-NPR-CVPR2024)
-
-<a href="https://huggingface.co/spaces/tancc/Generalizable_Deepfake_Detection-NPR-CVPR2024"><img src="assets/demo_detection.gif" width="70%"></a>
-
-## Environment setup
-**Classification environment:** 
-We recommend installing the required packages by running the command:
-```sh
-pip install -r requirements.txt
-```
-In order to ensure the reproducibility of the results, we provide the following suggestions：
-- Docker image: nvcr.io/nvidia/tensorflow:21.02-tf1-py3
-- Conda environment: [./pytorch18/bin/python](https://drive.google.com/file/d/16MK7KnPebBZx5yeN6jqJ49k7VWbEYQPr/view) 
-- Random seed during testing period: [Random seed](https://github.com/chuangchuangtan/NPR-DeepfakeDetection/blob/b4e1bfa59ec58542ab5b1e78a3b75b54df67f3b8/test.py#L14)
-
-## Getting the data
-<!-- 
-Download dataset from [CNNDetection CVPR2020 (Table1 results)](https://github.com/peterwang512/CNNDetection), [GANGen-Detection (Table2 results)](https://github.com/chuangchuangtan/GANGen-Detection) ([googledrive](https://drive.google.com/drive/folders/11E0Knf9J1qlv2UuTnJSOFUjIIi90czSj?usp=sharing)), [UniversalFakeDetect CVPR2023](https://github.com/Yuheng-Li/UniversalFakeDetect) ([googledrive](https://drive.google.com/drive/folders/1nkCXClC7kFM01_fqmLrVNtnOYEFPtWO-?usp=drive_link)), [DIRE 2023ICCV](https://github.com/ZhendongWang6/DIRE) ([googledrive](https://drive.google.com/drive/folders/1jZE4hg6SxRvKaPYO_yyMeJN_DOcqGMEf?usp=sharing)), Diffusion1kStep [googledrive](https://drive.google.com/drive/folders/14f0vApTLiukiPvIHukHDzLujrvJpDpRq?usp=sharing).
--->
-|                        | paper  | Url  |
-|:----------------------:|:-----:|:-----:|
-| Train set              | [CNNDetection CVPR2020](https://github.com/PeterWang512/CNNDetection)                   | [Baidudrive](https://pan.baidu.com/s/1l-rXoVhoc8xJDl20Cdwy4Q?pwd=ft8b)                 | 
-| Val   set              | [CNNDetection CVPR2020](https://github.com/PeterWang512/CNNDetection)                   | [Baidudrive](https://pan.baidu.com/s/1l-rXoVhoc8xJDl20Cdwy4Q?pwd=ft8b)                 | 
-| Table1 Test            | [CNNDetection CVPR2020](https://github.com/PeterWang512/CNNDetection)                   | [Baidudrive](https://pan.baidu.com/s/1l-rXoVhoc8xJDl20Cdwy4Q?pwd=ft8b)                 | 
-| Table2 Test            | [FreqNet AAAI2024](https://github.com/chuangchuangtan/FreqNet-DeepfakeDetection)        | [googledrive](https://drive.google.com/drive/folders/11E0Knf9J1qlv2UuTnJSOFUjIIi90czSj?usp=sharing)   | 
-| Table3 Test            | [DIRE ICCV2023](https://github.com/ZhendongWang6/DIRE)                                  | [googledrive](https://drive.google.com/drive/folders/1jZE4hg6SxRvKaPYO_yyMeJN_DOcqGMEf?usp=sharing)   | 
-| Table4 Test            | [UniversalFakeDetect CVPR2023](https://github.com/Yuheng-Li/UniversalFakeDetect)        | [googledrive](https://drive.google.com/drive/folders/1nkCXClC7kFM01_fqmLrVNtnOYEFPtWO-?usp=sharing)| 
-| Table5 Test            | Diffusion1kStep                                                                         | [googledrive](https://drive.google.com/drive/folders/14f0vApTLiukiPvIHukHDzLujrvJpDpRq?usp=sharing)   | 
-
-```
-pip install gdown==4.7.1
-
-chmod 777 ./download_dataset.sh
-
-./download_dataset.sh
-```
-## Directory structure
-<details>
-<summary> Click to expand the folder tree structure. </summary>
-
-```
-datasets
-|-- ForenSynths_train_val
-|   |-- train
-|   |   |-- car
-|   |   |-- cat
-|   |   |-- chair
-|   |   `-- horse
-|   `-- val
-|   |   |-- car
-|   |   |-- cat
-|   |   |-- chair
-|   |   `-- horse
-|   |-- test
-|       |-- biggan
-|       |-- cyclegan
-|       |-- deepfake
-|       |-- gaugan
-|       |-- progan
-|       |-- stargan
-|       |-- stylegan
-|       `-- stylegan2
-`-- Generalization_Test
-    |-- ForenSynths_test       # Table1
-    |   |-- biggan
-    |   |-- cyclegan
-    |   |-- deepfake
-    |   |-- gaugan
-    |   |-- progan
-    |   |-- stargan
-    |   |-- stylegan
-    |   `-- stylegan2
-    |-- GANGen-Detection     # Table2
-    |   |-- AttGAN
-    |   |-- BEGAN
-    |   |-- CramerGAN
-    |   |-- InfoMaxGAN
-    |   |-- MMDGAN
-    |   |-- RelGAN
-    |   |-- S3GAN
-    |   |-- SNGAN
-    |   `-- STGAN
-    |-- DiffusionForensics  # Table3
-    |   |-- adm
-    |   |-- ddpm
-    |   |-- iddpm
-    |   |-- ldm
-    |   |-- pndm
-    |   |-- sdv1_new
-    |   |-- sdv2
-    |   `-- vqdiffusion
-    `-- UniversalFakeDetect # Table4
-    |   |-- dalle
-    |   |-- glide_100_10
-    |   |-- glide_100_27
-    |   |-- glide_50_27
-    |   |-- guided          # Also known as ADM.
-    |   |-- ldm_100
-    |   |-- ldm_200
-    |   `-- ldm_200_cfg
-    |-- Diffusion1kStep     # Table5
-        |-- DALLE
-        |-- ddpm
-        |-- guided-diffusion    # Also known as ADM.
-        |-- improved-diffusion  # Also known as IDDPM.
-        `-- midjourney
-
-
-```
-</details>
-
-## Training the model 
-```sh
-CUDA_VISIBLE_DEVICES=0 ./pytorch18/bin/python train.py --name 4class-resnet-car-cat-chair-horse --dataroot ./datasets/ForenSynths_train_val --classes car,cat,chair,horse --batch_size 32 --delr_freq 10 --lr 0.0002 --niter 50
-```
-
-## Testing the detector
-Modify the dataroot in test.py.
-```sh
-CUDA_VISIBLE_DEVICES=0 ./pytorch18/bin/python test.py --model_path ./NPR.pth  --batch_size {BS}
-```
-
-## Detection Results
-
-### [AIGCDetectBenchmark](https://drive.google.com/drive/folders/1p4ewuAo7d5LbNJ4cKyh10Xl9Fg2yoFOw) using [ProGAN-4class checkpoint](https://github.com/chuangchuangtan/NPR-DeepfakeDetection/blob/main/model_epoch_last_3090.pth)
-
-When testing on AIGCDetectBenchmark, set no_resize and no_crop to True, and set batch_size to 1.
-To deal with images of odd sizes, add the following code in [network/resnet.py](https://github.com/chuangchuangtan/NPR-DeepfakeDetection/blob/e2dbbe673c69c0c7237726e809a725a0308ec43d/networks/resnet.py#L163).
-```
-n,c,w,h = x.shape
-if w%2 == 1 : x = x[:,:,:-1,:]
-if h%2 == 1 : x = x[:,:,:,:-1]
-```
-
-| Generator   |  CNNSpot | FreDect |   Fusing  | GramNet |   LNP   |  LGrad  |  DIRE-G | DIRE-D |  UnivFD |  RPTCon | NPR  |
-|  :---------:| :-----:  |:-------:| :--------:|:-------:|:-------:|:-------:|:-------:|:------:|:-------:|:-------:|:----:|
-| ProGAN      |  100.00  |  99.36  |   100.00  |  99.99  |  99.67  |  99.83  |  95.19  |  52.75 |  99.81  |  100.00 | 99.9 |
-| StyleGan    |  90.17   |  78.02  |   85.20   |  87.05  |  91.75  |  91.08  |  83.03  |  51.31 |  84.93  |  92.77  | 96.1 |
-| BigGAN      |  71.17   |  81.97  |   77.40   |  67.33  |  77.75  |  85.62  |  70.12  |  49.70 |  95.08  |  95.80  | 87.3 |
-| CycleGAN    |  87.62   |  78.77  |   87.00   |  86.07  |  84.10  |  86.94  |  74.19  |  49.58 |  98.33  |  70.17  | 90.3 |
-| StarGAN     |  94.60   |  94.62  |   97.00   |  95.05  |  99.92  |  99.27  |  95.47  |  46.72 |  95.75  |  99.97  | 99.6 |
-| GauGAN      |  81.42   |  80.57  |   77.00   |  69.35  |  75.39  |  78.46  |  67.79  |  51.23 |  99.47  |  71.58  | 85.4 |
-| Stylegan2   |  86.91   |  66.19  |   83.30   |  87.28  |  94.64  |  85.32  |  75.31  |  51.72 |  74.96  |  89.55  | 98.1 |
-| WFIR        |  91.65   |  50.75  |   66.80   |  86.80  |  70.85  |  55.70  |  58.05  |  53.30 |  86.90  |  85.80  | 60.7 |
-| ADM         |  60.39   |  63.42  |   49.00   |  58.61  |  84.73  |  67.15  |  75.78  |  98.25 |  66.87  |  82.17  | 84.9 |
-| Glide       |  58.07   |  54.13  |   57.20   |  54.50  |  80.52  |  66.11  |  71.75  |  92.42 |  62.46  |  83.79  | 96.7 |
-| Midjourney  |  51.39   |  45.87  |   52.20   |  50.02  |  65.55  |  65.35  |  58.01  |  89.45 |  56.13  |  90.12  | 92.6 |
-| SDv1.4      |  50.57   |  38.79  |   51.00   |  51.70  |  85.55  |  63.02  |  49.74  |  91.24 |  63.66  |  95.38  | 97.4 |
-| SDv1.5      |  50.53   |  39.21  |   51.40   |  52.16  |  85.67  |  63.67  |  49.83  |  91.63 |  63.49  |  95.30  | 97.5 |
-| VQDM        |  56.46   |  77.80  |   55.10   |  52.86  |  74.46  |  72.99  |  53.68  |  91.90 |  85.31  |  88.91  | 90.1 |
-| Wukong      |  51.03   |  40.30  |   51.70   |  50.76  |  82.06  |  59.55  |  54.46  |  90.90 |  70.93  |  91.07  | 91.7 |
-| DALLE2      |  50.45   |  34.70  |   52.80   |  49.25  |  88.75  |  65.45  |  66.48  |  92.45 |  50.75  |  96.60  | 99.6 |
-| Average     |  70.78   |  64.03  |   68.38   |  68.67  |  83.84  |  75.34  |  68.68  |  71.53 |  78.43  |  89.31  | **91.7** |
-
-### [GenImage](https://github.com/GenImage-Dataset/GenImage)
-
-<details>
-<summary> (1) Change "resize" to "translate and duplicate". (2) Set random seed to 70. (3) During testing, set no_crop to False. </summary>
-
-(1)
-```
-dset = datasets.ImageFolder(
-    root,
-    transforms.Compose([
-        # rz_func,
-	transforms.Lambda(lambda img: translate_duplicate(img, opt.cropSize)),
-	crop_func,
-	flip_func,
-	transforms.ToTensor(),
-	transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]))
-
-import math
-def translate_duplicate(img, cropSize):
-    if min(img.size) < cropSize:
-        width, height = img.size
-        
-        new_width = width * math.ceil(cropSize/width)
-        new_height = height * math.ceil(cropSize/height)
-        
-        new_img = Image.new('RGB', (new_width, new_height))
-        for i in range(0, new_width, width):
-            for j in range(0, new_height, height):
-                new_img.paste(img, (i, j))
-        return new_img
-    else:
-        return img
-```
-(2)
-Set [random seed](https://github.com/chuangchuangtan/NPR-DeepfakeDetection/blob/bed4c2c9eb9b2000e9a24233d3b010afa3452f12/train.py#L48) to 70.
-
-(3)
-During testing, set [no_crop](https://github.com/chuangchuangtan/NPR-DeepfakeDetection/blob/bed4c2c9eb9b2000e9a24233d3b010afa3452f12/train.py#L69) to False. And set [test config](https://github.com/chuangchuangtan/NPR-DeepfakeDetection/blob/bed4c2c9eb9b2000e9a24233d3b010afa3452f12/train.py#L30)
-```
-vals =       ['ADM', 'biggan', 'glide', 'midjourney', 'sdv5', 'vqdm', 'wukong']
-multiclass = [ 0,     0,        0,       0,            0,      0,      0      ]
-```
-</details>
-
-```
-./pytorch18/bin/python  train.py --dataroot {GenImage Path} --name sdv4_bs32_ --batch_size 32 --lr 0.0002 --niter 1  --cropSize 224 --classes sdv4 
-```
-
-Train with sdv4 as the training set, using a random seed of 70. [Pretrained checkpoint](https://drive.google.com/drive/folders/1_mD17F94xMbJqEAsWRW1gVsZ5db6YamI?usp=sharing).
-
-|Generator   | Acc. | A.P. |
-|:----------:|:----:|:----:|
-| ADM        | 87.8 | 96.0 |
-| biggan     | 80.7 | 89.8 |
-| glide      | 93.2 | 99.1 |
-| midjourney | 91.7 | 97.9 |
-| sdv5       | 94.4 | 99.9 |
-| vqdm       | 88.7 | 96.1 |
-| wukong     | 94.0 | 99.7 |
-| Mean       | 90.1 | 96.9 |
-
-<!--
-| <font size=2>Method</font>|<font size=2>ProGAN</font> |       |<font size=2>StyleGAN</font>|     |<font size=2>StyleGAN2</font>|    |<font size=2>BigGAN</font>|       |<font size=2>CycleGAN</font> |      |<font size=2>StarGAN</font>|       |<font size=2>GauGAN</font> |       |<font size=2>Deepfake</font>|    | <font size=2>Mean</font> |      |
-|:----------------------:|:-----:|:-----:|:------:|:---:|:-------:|:--:|:----:|:-----:|:-------:|:----:|:----: |:-----:|:---:  |:-----:|:----:|:----:|:----:|:----:|
-|                        | Acc.  | A.P.  | Acc.   | A.P.| Acc.  | A.P. | Acc.| A.P.   | Acc.    | A.P. | Acc.  | A.P.  | Acc.  | A.P.  | Acc. | A.P. | Acc. | A.P. |
-| CNNDetection           | 91.4  | 99.4  | 63.8   | 91.4| 76.4  | 97.5 | 52.9| 73.3   | 72.7    | 88.6 | 63.8  | 90.8  | 63.9  | 92.2  | 51.7 | 62.3 | 67.1 | 86.9 |
-| Frank                  | 90.3  | 85.2  | 74.5   | 72.0| 73.1  | 71.4 | 88.7| 86.0   | 75.5    | 71.2 | 99.5  | 99.5  | 69.2  | 77.4  | 60.7 | 49.1 | 78.9 | 76.5 |
-| Durall                 | 81.1  | 74.4  | 54.4   | 52.6| 66.8  | 62.0 | 60.1| 56.3   | 69.0    | 64.0 | 98.1  | 98.1  | 61.9  | 57.4  | 50.2 | 50.0 | 67.7 | 64.4 |
-| Patchfor               | 97.8  | 100.0 | 82.6   | 93.1| 83.6  | 98.5 | 64.7| 69.5   | 74.5    | 87.2 | 100.0 | 100.0 | 57.2  | 55.4  | 85.0 | 93.2 | 80.7 | 87.1 |
-| F3Net                  | 99.4  | 100.0 | 92.6   | 99.7| 88.0  | 99.8 | 65.3| 69.9   | 76.4    | 84.3 | 100.0 | 100.0 | 58.1  | 56.7  | 63.5 | 78.8 | 80.4 | 86.2 |
-| SelfBland              | 58.8  | 65.2  | 50.1   | 47.7| 48.6  | 47.4 | 51.1| 51.9   | 59.2    | 65.3 | 74.5  | 89.2  | 59.2  | 65.5  | 93.8 | 99.3 | 61.9 | 66.4 |
-| GANDetection           | 82.7  | 95.1  | 74.4   | 92.9| 69.9  | 87.9 | 76.3| 89.9   | 85.2    | 95.5 | 68.8  | 99.7  | 61.4  | 75.8  | 60.0 | 83.9 | 72.3 | 90.1 |
-| BiHPF                  | 90.7  | 86.2  | 76.9   | 75.1| 76.2  | 74.7 | 84.9| 81.7   | 81.9    | 78.9 | 94.4  | 94.4  | 69.5  | 78.1  | 54.4 | 54.6 | 78.6 | 77.9 |
-| FrePGAN                | 99.0  | 99.9  | 80.7   | 89.6| 84.1  | 98.6 | 69.2| 71.1   | 71.1    | 74.4 | 99.9  | 100.0 | 60.3  | 71.7  | 70.9 | 91.9 | 79.4 | 87.2 |
-| LGrad                  | 99.9  | 100.0 | 94.8   | 99.9| 96.0  | 99.9 | 82.9| 90.7   | 85.3    | 94.0 | 99.6  | 100.0 | 72.4  | 79.3  | 58.0 | 67.9 | 86.1 | 91.5 |
-| Ojha                   | 99.7  | 100.0 | 89.0   | 98.7| 83.9  | 98.4 | 90.5| 99.1   | 87.9    | 99.8 | 91.4  | 100.0 | 89.9  | 100.0 | 80.2 | 90.2 | 89.1 | 98.3 |
-| NPR(our)               | 99.8  | 100.0 | 96.3   | 99.8| 97.3  | 100.0| 87.5| 94.5   | 95.0    | 99.5 | 99.7  | 100.0 | 86.6  | 88.8  | 77.4 | 86.2 | 92.5 | 96.1 |
--->
-
-## Acknowledgments
-
-This repository borrows partially from the [CNNDetection](https://github.com/peterwang512/CNNDetection).
+**Author:** Trần Thị Kim Thanh ([@KimThanhTran](https://github.com/KimThanhTran)), final-year Software Engineering student at HUTECH, as part of a scientific research project on deepfake detection.
